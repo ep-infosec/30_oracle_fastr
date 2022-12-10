@@ -1,0 +1,130 @@
+/*
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 3 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 3 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 3 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.truffle.r.nodes.primitive;
+
+import com.oracle.truffle.r.runtime.RInternalError;
+import com.oracle.truffle.r.runtime.data.AbstractContainerLibrary;
+import com.oracle.truffle.r.runtime.data.RComplex;
+import com.oracle.truffle.r.runtime.data.VectorDataLibrary;
+import com.oracle.truffle.r.runtime.data.model.RAbstractContainer;
+import com.oracle.truffle.r.runtime.data.model.RAbstractVector;
+import com.oracle.truffle.r.runtime.nodes.RBaseNode;
+import com.oracle.truffle.r.runtime.data.WarningInfo;
+
+/**
+ * A typed binary map function for use in {@link BinaryMapNode}. The called methods depend on the
+ * used argumentType and resultType in {@link BinaryMapNode}.
+ */
+@SuppressWarnings("unused")
+public abstract class BinaryMapFunctionNode extends RBaseNode {
+
+    public byte applyLogical(byte left, byte right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public byte applyLogical(int left, int right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public byte applyLogical(double left, double right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public byte applyLogical(RComplex left, RComplex right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public byte applyLogical(String left, String right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public int applyInteger(int left, int right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public int applyInteger(WarningInfo warningInfo, int left, int right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public double applyDouble(double left, double right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public double applyDouble(int left, int right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public byte applyRaw(byte left, byte right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public String applyCharacter(String left, String right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    public RComplex applyComplex(RComplex left, RComplex right) {
+        throw RInternalError.shouldNotReachHere();
+    }
+
+    /**
+     * Returns <code>true</code> if one of the vector classes may require constant time folding with
+     * {@link #tryFoldConstantTime(WarningInfo, Object, int, Object, int)}.
+     */
+    public boolean mayFoldConstantTime(RAbstractVector left, RAbstractVector right) {
+        return false;
+    }
+
+    /**
+     * Returns a folded version of the left and right vector if both can be folded for this scalar
+     * operation. Returns <code>null</code> if folding was not possible.
+     */
+    public RAbstractVector tryFoldConstantTime(WarningInfo warningInfo, Object leftData, int leftLength, Object rightData, int rightLength) {
+        return null;
+    }
+
+    /**
+     * Enables the node for the two operation. Invoked once for each BinaryMap operation invocation.
+     */
+    public void enable(RAbstractVector left, RAbstractVector right) {
+
+    }
+
+    public void enable(VectorDataLibrary leftLibrary, Object leftData, VectorDataLibrary rightLibrary, Object rightData) {
+
+    }
+
+    public void enable(AbstractContainerLibrary leftLibrary, RAbstractContainer leftData, AbstractContainerLibrary rightLibrary, RAbstractContainer rightData) {
+
+    }
+
+    public void initialize(VectorDataLibrary leftDataLib, RAbstractContainer left, VectorDataLibrary rightDataLib, RAbstractContainer right) {
+
+    }
+
+    /**
+     * Returns <code>true</code> if the result can always be considered complete.
+     */
+    public boolean isComplete() {
+        return true;
+    }
+}

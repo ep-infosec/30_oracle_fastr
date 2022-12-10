@@ -1,0 +1,91 @@
+#
+# Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 3 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 3 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
+# Copies the Blas and lapack libraries
+
+ifneq (,$(wildcard $(TOPDIR)/platform.mk))
+include $(TOPDIR)/platform.mk
+else
+ifneq ($(MAKECMDGOALS),clean)
+$(error no platform.mk available)
+endif
+endif
+
+OSNAME := $(shell uname)
+
+# blas and lapack implementations can be overridden using the following environment variables
+BLAS_LAPACK_DIR ?= $(GNUR_HOME_BINARY)/lib
+BLAS_SOURCE ?= $(BLAS_LAPACK_DIR)/libRblas$(DYLIB_EXT)
+LAPACK_SOURCE ?= $(BLAS_LAPACK_DIR)/libRlapack$(DYLIB_EXT)
+
+BLAS_TARGET := $(FASTR_LIB_DIR)/libRblas$(DYLIB_EXT)
+LAPACK_TARGET := $(FASTR_LIB_DIR)/libRlapack$(DYLIB_EXT)
+
+# at a minimum we need to know where libpcre/libgfortran/libquadmath are located,
+# to keep the Java side simpler, we (may) copy them to $(FASTR_LIB_DIR) unless
+# they were found in the standard system locations
+ifdef FASTR_RELEASE
+  FASTR_CAPTURE_DEPENDENCIES ?= pcre2-8 gfortran quadmath gcc_s
+endif # FASTR_RELEASE
+
+$(info ***** FastR Libraries configuration *****)
+$(info BLAS_SOURCE: $(BLAS_SOURCE))
+$(info LAPACK_SOURCE: $(LAPACK_SOURCE))
+$(info FASTR_CAPTURE_DEPENDENCIES: $(FASTR_CAPTURE_DEPENDENCIES))
+
+
+.PHONY: all
+
+all: $(FASTR_LIB_DIR) $(BLAS_TARGET) $(LAPACK_TARGET) rcopylib.done
+
+$(FASTR_LIB_DIR):
+	mkdir -p $(FASTR_LIB_DIR)
+
+$(BLAS_TARGET): $(GNUR_HOME_BINARY)/lib/libRblas$(DYLIB_EXT)
+	cp $(BLAS_SOURCE) $(BLAS_TARGET)
+
+$(LAPACK_TARGET): $(GNUR_HOME_BINARY)/lib/libRlapack$(DYLIB_EXT)
+	cp $(LAPACK_SOURCE) $(LAPACK_TARGET)
+ifeq ($(OS_NAME),Darwin)
+# libRblas depends on libgfortran, libquadmath
+# libRlapack depends on libgfortran, libquadmath, libRblas, libR
+# use @rpath to make references relocatable
+	install_name_tool -change libRblas.dylib @rpath/libRblas.dylib $(LAPACK_TARGET)
+	install_name_tool -change libR.dylib @rpath/libR.dylib $(LAPACK_TARGET)
+	install_name_tool -id @rpath/libRblas.dylib $(BLAS_TARGET)
+	install_name_tool -id @rpath/libRlapack.dylib $(LAPACK_TARGET)
+endif
+
+# we can't create exact dependencies since we don't know exactly
+# what versions of the libs (if any) will be copied, so we use a sentinel
+# file to indicate that the check has been done.
+rcopylib.done: 
+	for target in $(FASTR_CAPTURE_DEPENDENCIES); do \
+		python $(FASTR_R_HOME)/mx.fastr/copylib.py copylib $$target $(FASTR_LIB_DIR) || exit 1; \
+	done
+	touch rcopylib.done
+
+clean:
+	rm -f $(BLAS_TARGET) $(LAPACK_TARGET)
+	rm -f $(foreach target,$(FASTR_CAPTURE_DEPENDENCIES),$(wildcard $(FASTR_LIB_DIR)/lib$(target).*))
+	rm -f rcopylib.done

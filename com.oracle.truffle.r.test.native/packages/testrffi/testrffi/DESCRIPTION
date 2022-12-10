@@ -1,0 +1,10 @@
+Package: testrffi
+Type: Package
+Title: Tests The R FFI interface
+Version: 1.0
+Date: 2017-02-2
+Author: FastR Tester
+Maintainer: FastR Tester <fastr@yahoogroups.com>
+Description: Tests The R FFI interface
+License: GPL-2
+NeedsCompilation: yes

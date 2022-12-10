@@ -1,0 +1,54 @@
+#
+# Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 3 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 3 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
+# Extracts relevant parts of the generated GnuR Makeconf file into FastR's platform.mk
+# and into the Makeconf that will be copied to etc for install_packages.
+
+.PHONY: all clean
+
+OS_NAME := $(shell uname)
+OS_DIR := $(shell echo $(OS_NAME) | tr '[:upper:]' '[:lower:]' )
+
+all: $(TOPDIR)/platform.mk
+
+# need to get BLAS and LAPACK defns from etc/Makeconf
+
+$(TOPDIR)/platform.mk: sedMakeconf $(GNUR_HOME)/Makeconf Makefile
+	sed -f sedMakeconf $(GNUR_HOME)/Makeconf > /dev/null 2>&1
+	ed platform.mk.temp < edAddFASTR
+
+	# A workaround to a missing omp library error occurring on Linux
+	sed -i -e 's/-fopenmp//' platform.mk.temp
+	# A workaround for a Sulong issue: TODO: the issue ID
+	sed -i -e 's/-O2//' platform.mk.temp
+	# the undefined option is not compatible with LLVM bundling
+	sed -i -e 's/-undefined dynamic_lookup//' platform.mk.temp
+	# This overrides the Fortran compiler with our f2c tool and CC with LABS_LLVM_CC
+	ed platform.mk.temp <edLLVM
+
+	echo OS_NAME = $(OS_NAME) >> platform.mk.temp
+	echo JDK_OS_DIR = $(OS_DIR) >> platform.mk.temp
+	mv platform.mk.temp $(TOPDIR)/platform.mk
+
+clean:
+	rm -f $(TOPDIR)/platform.mk

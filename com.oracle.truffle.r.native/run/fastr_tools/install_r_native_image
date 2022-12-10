@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 3 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 3 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
+# This script is deployed as <FASTR>/bin/install_r_native_image
+set -e
+
+source="${BASH_SOURCE[0]}"
+while [ -h "$source" ] ; do
+    prev_source="$source"
+    source="$(readlink "$source")";
+    if [[ "$source" != /* ]]; then
+        # if the link was relative, it was relative to where it came from
+        dir="$( cd -P "$( dirname "$prev_source" )" && pwd )"
+        source="$dir/$source"
+    fi
+done
+location="$( cd -P "$( dirname "$source" )" && pwd )"
+fastr_home="$( dirname "$location" )"
+
+silent=0
+verbose=0
+for arg in "$@"; do
+    if [[ $arg == "--silent" ]]; then
+        silent=1
+    elif [[ $arg == "--verbose" ]]; then
+        verbose=1
+    elif [[ $arg == "--help" ]]; then
+        echo "Usage: install_r_native_image [--silent]"
+        echo "Builds and installs native image of the R runtime."
+        echo "Use the --silent option to turn off the confirmation when installing."
+        echo "Use the --verbose option to turn on detailed logging."
+	exit 0
+    fi
+done
+
+function log {
+    if [[ $verbose -eq 1 ]]; then
+        echo $@
+    fi
+}
+
+echo
+echo "Note: this script is deprecated use: \$GRAALVM_HOME/bin/gu rebuild-images R"
+echo
+if [[ $silent -eq 0 ]]; then
+    echo "This script is going to build a native image of the R runtime and update the R launchers to use that image as the default, i.e., when '--jvm' option is not used."
+    echo "The build takes several minutes and needs a minimum of 8GB of RAM and 200MB of free disk space. The computer may lag during the build."
+    read -p "Are you sure you want to build and install the native image of the R runtime? (Yy/Nn) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled..."
+        exit 2
+    fi
+fi
+
+log "Changing directory to: $fastr_home/bin"
+cd "$fastr_home/bin"
+
+graalvm_home_bin="../../../../bin"
+native_image=$graalvm_home_bin/native-image
+if [ ! -f "$native_image" ]; then
+    graalvm_home_bin="../../../bin"
+    native_image=$graalvm_home_bin/native-image
+fi
+if [ ! -f "$native_image" ]; then
+    echo "native-image was not found. It can be installed executing \`$graalvm_home_bin/gu install native-image\`"
+    exit
+fi
+graalvm_home="$( dirname "${graalvm_home_bin}" )"
+log "current working directory: ${PWD}"
+log "relative graalvm_home: ${graalvm_home}"
+log "relative FastR home: ${fastr_home}"
+
+"$native_image" --macro:RMain-launcher

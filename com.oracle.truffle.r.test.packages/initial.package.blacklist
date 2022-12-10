@@ -1,0 +1,308 @@
+Package: beadarray
+Reason: Bioconductor
+
+Package: snpStats
+Reason: Bioconductor
+
+Package: RBGL
+Reason: Bioconductor
+
+Package: metaArray
+Reason: Bioconductor
+
+Package: GenomicAlignments
+Reason: Bioconductor
+
+Package: GEOquery
+Reason: Bioconductor
+
+Package: graph
+Reason: Bioconductor
+
+Package: SAGx
+Reason: Bioconductor
+
+Package: LBE
+Reason: Bioconductor
+
+Package: widgetTools
+Reason: Bioconductor
+
+Package: rgl
+Reason: graphics
+
+Package: ChemmineR
+Reason: Bioconductor
+
+Package: ShortRead
+Reason: Bioconductor
+
+Package: safe
+Reason: Bioconductor
+
+Package: fmcsR
+Reason: Bioconductor
+
+Package: MergeMaid
+Reason: Bioconductor
+
+Package: rtracklayer
+Reason: Bioconductor
+
+Package: AnnotationDbi
+Reason: Bioconductor
+
+Package: MAIT
+Reason: Bioconductor
+
+Package: Cairo
+Reason: graphics
+
+Package: GlobalAncova
+Reason: Bioconductor
+
+Package: DNAcopy
+Reason: Bioconductor
+
+Package: RedeR
+Reason: Bioconductor
+
+Package: lfa
+Reason: Bioconductor
+
+Package: GEOmetadb
+Reason: Bioconductor
+
+Package: tcltk2
+Reason: tcltk
+
+Package: BSgenome
+Reason: Bioconductor
+
+Package: nem
+Reason: Bioconductor
+
+Package: minet
+Reason: Bioconductor
+
+Package: Icens
+Reason: Bioconductor
+
+Package: R.methodsS3
+Reason: replacement
+
+Package: breastCancerVDX
+Reason: Bioconductor
+
+Package: topGO
+Reason: Bioconductor
+
+Package: R2HTML
+Reason: parser
+
+Package: BiocInstaller
+Reason: Bioconductor
+
+Package: GOSemSim
+Reason: Bioconductor
+
+Package: multtest
+Reason: Bioconductor
+
+Package: globaltest
+Reason: Bioconductor
+
+Package: convert
+Reason: Bioconductor
+
+Package: RDAVIDWebService
+Reason: Bioconductor
+
+Package: simpleaffy
+Reason: Bioconductor
+
+Package: GO.db
+Reason: Bioconductor
+
+Package: EBImage
+Reason: Bioconductor
+
+Package: geneplotter
+Reason: Bioconductor
+
+Package: S4Vectors
+Reason: Bioconductor
+
+Package: xcms
+Reason: Bioconductor
+
+Package: qvalue
+Reason: Bioconductor
+
+Package: BSgenome.Hsapiens.UCSC.hg19
+Reason: Bioconductor
+
+Package: GOstats
+Reason: Bioconductor
+
+Package: pcaMethods
+Reason: Bioconductor
+
+Package: BiocGenerics
+Reason: Bioconductor
+
+Package: phyloseq
+Reason: Bioconductor
+
+Package: copynumber
+Reason: Bioconductor
+
+Package: CNTools
+Reason: Bioconductor
+
+Package: qpgraph
+Reason: Bioconductor
+
+Package: affxparser
+Reason: Bioconductor
+
+Package: org.Hs.eg.db
+Reason: Bioconductor
+
+Package: genefilter
+Reason: Bioconductor
+
+Package: DESeq
+Reason: Bioconductor
+
+Package: GroupSeq
+Reason: tclTk
+
+Package: KEGGREST
+Reason: Bioconductor
+
+Package: AnnotLists
+Reason: tcltk
+
+Package: fabia
+Reason: Bioconductor
+
+Package: zlibbioc
+Reason: Bioconductor
+
+Package: flowCore
+Reason: Bioconductor
+
+Package: aroma.light
+Reason: Bioconductor
+
+Package: marray
+Reason: Bioconductor
+
+Package: piano
+Reason: Bioconductor
+
+Package: annotate
+Reason: Bioconductor
+
+Package: Rgraphviz
+Reason: Bioconductor
+
+Package: biomaRt
+Reason: Bioconductor
+
+Package: DESeq2
+Reason: Bioconductor
+
+Package: preprocessCore
+Reason: Bioconductor
+
+Package: impute
+Reason: Bioconductor
+
+Package: Biobase
+Reason: Bioconductor
+
+Package: aplpack
+Reason: tcltk
+
+Package: siggenes
+Reason: Bioconductor
+
+Package: survcomp
+Reason: Bioconductor
+
+Package: Rsamtools
+Reason: Bioconductor
+
+Package: seqLogo
+Reason: Bioconductor
+
+Package: flowWorkspace
+Reason: Bioconductor
+
+Package: GSEABase
+Reason: Bioconductor
+
+Package: limma
+Reason: Bioconductor
+
+Package: affy
+Reason: Bioconductor
+
+Package: ssize
+Reason: Bioconductor
+
+Package: pdInfoBuilder
+Reason: Bioconductor
+
+Package: GeneMeta
+Reason: Bioconductor
+
+Package: vsn
+Reason: Bioconductor
+
+Package: GSVA
+Reason: Bioconductor
+
+Package: GenomeInfoDb
+Reason: Bioconductor
+
+Package: chopsticks
+Reason: Bioconductor
+
+Package: oligo
+Reason: Bioconductor
+
+Package: IRanges
+Reason: Bioconductor
+
+Package: sva
+Reason: Bioconductor
+
+Package: GenomicRanges
+Reason: Bioconductor
+
+Package: supraHex
+Reason: Bioconductor
+
+Package: Biostrings
+Reason: Bioconductor
+
+Package: gcrma
+Reason: Bioconductor
+
+Package: lumi
+Reason: Bioconductor
+
+Package: mzR
+Reason: Bioconductor
+
+Package: edgeR
+Reason: Bioconductor
+
+Package: MassSpecWavelet
+Reason: Bioconductor
+
+Package: mixtools
+Reason: TestLoops

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+#
+# Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 3 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 3 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
+# This script is deployed as <FASTR>/bin/configure_fastr.sh
+
+source="${BASH_SOURCE[0]}"
+# "un-link" the source path
+while [ -h "$source" ] ; do
+  prev_source="$source"
+  source="$(readlink "$source")";
+  if [[ "$source" != /* ]]; then
+    # if the link was relative, it was relative to where it came from
+    dir="$( cd -P "$( dirname "$prev_source" )" && pwd )"
+    source="$dir/$source"
+  fi
+done
+r_bin="$( cd -P "$( dirname "$source" )" && pwd )"
+FASTR_HOME_DIR="$( dirname "$r_bin" )"
+
+function printHelp {
+  echo "Checks FastR requirements and creates personal library directory (R_LIBS_USER)."
+  echo "usage: configure_fastr [--help]"
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --help)
+      printHelp
+      exit 0
+    ;;
+    *)
+      >&2 echo "Unknown option '$1'"
+      printHelp
+      exit 1
+    ;;
+  esac
+  shift
+done
+
+(
+  if [[ "$OSTYPE" == "linux-gnu" ]]; then
+    if ! command -v ldconfig>/dev/null; then
+      >&2 echo "Tool 'ldconfig' is not available. Maybe you need to run this as a root?"
+      exit 2
+    fi
+    ldconfig -p > /dev/null 2>&1
+    ldconfig_res=$?
+    if [[ $ldconfig_res -ne 0 ]]; then
+      echo "Cannot run ldconfig to check the availability of some libraries on your system."
+      echo "The only requirement of FastR on most Linux distributions is libgomp.so.1. You can ensure manually that this library is not missing on your system."
+      echo "Note: FastR may work."
+      exit 3
+    fi
+    res=0
+    if ! ldconfig -p | grep --quiet "libgomp.so.1"; then
+      echo "Error: could not find OpenMP runtime library: libgomp.so.1"
+      echo "Please install the OpenMP runtime library:"
+      echo "    On Debian based systems: apt-get install libgomp1"
+      echo "    On Oracle Linux: yum install libgomp"
+      echo "    Note: Oracle Linux 8 should contain libgomp by default"
+      res=1
+    fi
+    if [[ $res != 0 ]]; then
+      echo "The basic configuration of FastR failed."
+      echo "To learn more visit https://www.graalvm.org/docs/reference-manual/languages/r"
+      exit 4
+    else
+      echo "The basic configuration of FastR was successful."
+      echo ""
+      echo "Note: if you intend to install R packages you may need additional dependencies."
+      echo "The following packages should cover dependencies of the most commonly used R packages:"
+      echo "    On Debian based systems: apt-get install build-essential gfortran libxml2 libc++-dev"
+      echo "    On Oracle Linux: yum groupinstall 'Development Tools' && yum install gcc-gfortran"
+    fi
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "FastR should not have any requirements on MacOS."
+    echo ""
+    echo "Note: if you intend to install R packages you may need additional dependencies."
+    echo "The most common dependency is GFortran, which must be of version 8.3.0 or later."
+    echo "See https://gcc.gnu.org/wiki/GFortranBinaries."
+    echo "If the 'gfortran' binary is not on the system path, you need to configure the full path to it in $FASTR_HOME_DIR/etc/Makeconf (variable FC)"
+  else
+    echo "Unknown operating system."
+    echo "FastR may still work."
+    echo "Make sure that OpenMP runtime library (libgomp.so.1) is installed on your system."
+    echo "If you intend to install R packages you may need additional dependencies."
+    echo "The most common dependency is GFortran."
+  fi
+
+  export R_DEFAULT_PACKAGES=base
+  R_LIBS_USER=`"$FASTR_HOME_DIR/bin/R" --no-echo -e 'cat(path.expand(Sys.getenv("R_LIBS_USER")))'`
+  if [ ! -d "$R_LIBS_USER" ]; then
+    echo
+    echo "Default personal library directory ($R_LIBS_USER) does not exist."
+    read -p "Do you wish to create it now? (Yy/Nn) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      echo "Creating personal library directory: $R_LIBS_USER"
+      mkdir -p "$R_LIBS_USER"
+    fi
+  fi
+
+  echo "DONE"
+)

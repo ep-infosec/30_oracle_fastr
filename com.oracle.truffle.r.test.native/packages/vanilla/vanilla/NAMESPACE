@@ -1,0 +1,6 @@
+export(vanilla)
+export(functionTest)
+export("foo<-")
+export("someDelayAssignedGlobal")
+export(use_strrep)
+export(use_intToBits)

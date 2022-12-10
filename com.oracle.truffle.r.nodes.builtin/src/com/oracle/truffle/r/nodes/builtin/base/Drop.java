@@ -1,0 +1,156 @@
+/*
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 3 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 3 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 3 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.truffle.r.nodes.builtin.base;
+
+import static com.oracle.truffle.r.runtime.builtins.RBehavior.PURE;
+import static com.oracle.truffle.r.runtime.builtins.RBuiltinKind.INTERNAL;
+
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.profiles.ConditionProfile;
+import com.oracle.truffle.r.runtime.data.nodes.attributes.SpecialAttributesFunctions.GetDimAttributeNode;
+import com.oracle.truffle.r.runtime.data.nodes.attributes.SpecialAttributesFunctions.GetDimNamesAttributeNode;
+import com.oracle.truffle.r.runtime.data.nodes.attributes.SpecialAttributesFunctions.SetDimAttributeNode;
+import com.oracle.truffle.r.runtime.data.nodes.attributes.SpecialAttributesFunctions.SetDimNamesAttributeNode;
+import com.oracle.truffle.r.runtime.data.nodes.attributes.SpecialAttributesFunctions.SetNamesAttributeNode;
+import com.oracle.truffle.r.nodes.builtin.RBuiltinNode;
+import com.oracle.truffle.r.runtime.builtins.RBuiltin;
+import com.oracle.truffle.r.runtime.data.RDataFactory;
+import com.oracle.truffle.r.runtime.data.RList;
+import com.oracle.truffle.r.runtime.data.RNull;
+import com.oracle.truffle.r.runtime.data.RStringVector;
+import com.oracle.truffle.r.runtime.data.model.RAbstractVector;
+
+@RBuiltin(name = "drop", kind = INTERNAL, parameterNames = {"x"}, behavior = PURE)
+public abstract class Drop extends RBuiltinNode.Arg1 {
+
+    private final ConditionProfile nullDimensions = ConditionProfile.createBinaryProfile();
+    private final ConditionProfile resultIsVector = ConditionProfile.createBinaryProfile();
+    private final ConditionProfile resultIsScalarProfile = ConditionProfile.createBinaryProfile();
+    private final ConditionProfile noDimNamesProfile = ConditionProfile.createBinaryProfile();
+
+    static {
+        Casts.noCasts(Drop.class);
+    }
+
+    @Specialization
+    protected RAbstractVector doDrop(RAbstractVector x,
+                    @Cached("create()") GetDimAttributeNode getDimsNode,
+                    @Cached("create()") SetDimAttributeNode setDimsNode,
+                    @Cached("create()") SetDimNamesAttributeNode setDimsNamesNode,
+                    @Cached("create()") GetDimNamesAttributeNode getDimsNamesNode,
+                    @Cached("create()") SetNamesAttributeNode setNamesNode) {
+        int[] dims = getDimsNode.getDimensions(x);
+        if (nullDimensions.profile(dims == null)) {
+            return x;
+        }
+
+        // check the size of new dimensions
+        int newDimsLength = 0;
+        int lastNonOneIndex = -1;
+        for (int i = 0; i < dims.length; ++i) {
+            if (dims[i] != 1) {
+                newDimsLength++;
+                lastNonOneIndex = i;
+            }
+        }
+
+        // the result is single value, all dims == 1
+        if (resultIsScalarProfile.profile(lastNonOneIndex == -1)) {
+            RAbstractVector r = x.copy();
+            setDimsNode.setDimensions(r, null);
+            setDimsNamesNode.setDimNames(r, null);
+            setNamesNode.setNames(r, null);
+            return r;
+        }
+
+        // the result is vector
+        if (resultIsVector.profile(newDimsLength <= 1)) {
+            return toVector(x, lastNonOneIndex, setDimsNode, getDimsNamesNode, setNamesNode);
+        }
+
+        // else: the result will be a matrix, copy non-1 dimensions
+        int[] newDims = new int[newDimsLength];
+        int newDimsIdx = 0;
+        for (int i = 0; i < dims.length; i++) {
+            if (dims[i] != 1) {
+                newDims[newDimsIdx++] = dims[i];
+            }
+        }
+
+        RAbstractVector result = x.copy();
+        setDimsNode.setDimensions(result, newDims);
+
+        // if necessary, copy corresponding dimnames
+        RList oldDimNames = getDimsNamesNode.getDimNames(x);
+        if (noDimNamesProfile.profile(oldDimNames != null)) {
+            newDimsIdx = 0;
+            Object[] newDimNames = new Object[newDimsLength];
+            for (int i = 0; i < dims.length; i++) {
+                if (dims[i] != 1 && i < oldDimNames.getLength()) {
+                    newDimNames[newDimsIdx++] = oldDimNames.getDataAt(i);
+                }
+            }
+            setDimsNamesNode.setDimNames(result, RDataFactory.createList(newDimNames));
+        } else {
+            setDimsNamesNode.setDimNames(result, null);
+        }
+
+        return result;
+    }
+
+    /**
+     * Handles the case when result is just a vector. The only catch is that we might have to copy
+     * corresponding index from dimnames to names attribute of the new vector.
+     */
+    private RAbstractVector toVector(RAbstractVector x, int nonOneIndex, SetDimAttributeNode setDimsNode, GetDimNamesAttributeNode getDimNamesNode, SetNamesAttributeNode setNamesNode) {
+        RAbstractVector result = x.copy(); // share?
+        setDimsNode.setDimensions(result, null);
+
+        // copy dimnames to names if possible
+        RList dimNames = getDimNamesNode.getDimNames(x);
+        if (noDimNamesProfile.profile(dimNames != null) && nonOneIndex < dimNames.getLength()) {
+            Object names = dimNames.getDataAt(nonOneIndex);
+            if (names != RNull.instance) {
+                setNamesNode.setNames(result, ensureStringVector(names));
+            }
+        }
+
+        return result;
+    }
+
+    private static RStringVector ensureStringVector(Object value) {
+        if (value instanceof RStringVector) {
+            return ((RStringVector) value).materialize();
+        } else {
+            assert value instanceof String : value;
+            return RDataFactory.createStringVector(new String[]{(String) value}, true);
+        }
+    }
+
+    @Fallback
+    protected Object doDrop(Object x) {
+        return x;
+    }
+}

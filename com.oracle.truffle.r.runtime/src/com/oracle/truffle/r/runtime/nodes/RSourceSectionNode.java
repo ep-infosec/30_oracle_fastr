@@ -1,0 +1,60 @@
+/*
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 3 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 3 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 3 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.truffle.r.runtime.nodes;
+
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.r.runtime.RDeparse;
+
+/**
+ * A subclass of {@link RNode} that carries {@link SourceSection}. Wherever possible, a node that
+ * implements {@link RSyntaxNode} should subclass this class. If that is not possible, due to
+ * inheritance restrictions, just cut and paste the class body into the class, as it's not worth a
+ * level of indirection for such a trivial piece of code.
+ */
+public abstract class RSourceSectionNode extends RAttributableNode implements RSyntaxNode {
+
+    @CompilationFinal private SourceSection sourceSection;
+
+    protected RSourceSectionNode(SourceSection sourceSection) {
+        assert sourceSection != null;
+        this.sourceSection = sourceSection;
+    }
+
+    @Override
+    public final void setSourceSection(SourceSection sourceSection) {
+        assert sourceSection != null;
+        this.sourceSection = sourceSection;
+    }
+
+    @Override
+    public final SourceSection getLazySourceSection() {
+        return sourceSection;
+    }
+
+    @Override
+    public final SourceSection getSourceSection() {
+        RDeparse.ensureSourceSection(this);
+        return sourceSection;
+    }
+}

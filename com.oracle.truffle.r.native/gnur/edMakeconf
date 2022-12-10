@@ -1,0 +1,10 @@
+H
+/^CFLAGS/s/$/ -fPIC/
+g/^CXXFLAGS/s/$/ -fPIC/
+g/^CXX98FLAGS/s/$/ -fPIC/
+g/^CXX11FLAGS/s/$/ -fPIC/
+g/^CXX14FLAGS/s/$/ -fPIC/
+g/^CXX17FLAGS/s/$/ -fPIC/
+g/^FFLAGS/s/$/ -fPIC/
+w
+q

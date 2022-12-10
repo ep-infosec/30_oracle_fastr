@@ -1,0 +1,1330 @@
+#
+# Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 3 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 3 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
+# A script to install and optionally test packages (typically from CRAN)
+# By default all packages are candidates for installation, but this
+# can be limited in the following ways:
+#
+# 1. by a regexp pattern which must be the last argument on the command line
+# 2. by an explicit list from a file given by the --pkg-filelist option
+# 3. from the set of installed packages found in the lib install directory (option --pkg-list-installed)
+#    (useful primarily for testing a set of pre-installed packages
+
+# This script can install packages from a variety of sources PROVIDED that they follow the
+# structure used by CRAN, which is the main source of packages in the R world. (I.e. they support
+# utils::available.packages and utils::install.packages).
+# Other sources include:
+#
+# BioConductor
+# GitHub
+# FastR internal packages
+
+# BioConductor has it's own install mechanism but it is layered on the CRAN model.
+
+# A list of repos can be provided  with the --repos argument, which ia comma separated string of name=value pairs.
+# The names "CRAN", "BIOC" and "FASTR" are understood and have default values.
+# By default, we use the CRAN mirror specified in the --repos argument or env var CRAN_MIRROR.
+# The default value for --repos is "CRAN=http://cloud.r-project.org/"
+
+# Packages are installed into the directory specified by the --lib arg (or R_LIBS_USER env var)
+
+# The env var R_LIBS_USER or the option --lib must be set to the directory where the install should take place.
+# N.B. --lib works for installation. However, when running tests ( --run-tests), it does not and
+# R_LIBS_USER must be set instead (as well) since some of the test code has explicit "library(foo)" calls
+# without a "lib.loc" argument. N.B. For reasons I do not understand tools::testInstalledPackage
+# explicitly sets R_LIBS to the empty string before testing the main test file (but paradoxically not when
+# testing the "examples"), which is why we use R_LIBS_USER.
+
+# A single package install can be handled in three ways, based on the run-mode argument (default 'internal'):
+#   system: use a subprocess via the system2 command
+#   internal: direct call to tools::install.packages
+#   context: run in separate FastR context
+
+# Package-specific environment variables can be specified through the PKG_TEST_ENV_<pkgname> environment variable.
+# The individual environment variable pairs are delimited by a comma, e.g.
+#   export PKG_TEST_ENV_miniUI="LANGUAGE=en,LC_ALL=C"
+# specifies the environment variables LANGUAGE and LC_ALL for the miniUI package test.
+
+# If --use-installed-pkgs is set the lib install directory is analyzed for existing (correctly) installed packages
+# and these are not re-installed.
+
+# By default dependents are installed implicitly by the utils::install.packages function.
+# However, if --install-dependents-first is passed to this script, the dependents of a package P are installed explicitly
+# in (transitive) dependency order and, if any install fails, the install for P (and any remaining
+# dependents) is aborted. This also prevents re-installation when -use-installed-pkgs is set
+
+# test output goes to a directory derived from the '--testdir dir' option (default 'test'). Each package's test output is
+# stored in a subdirectory named after the package.
+
+# There are three ways to specify the packages to be installed/tested
+# --pkg-pattern a regular expression to match packages
+# --pkg-filelist a file containing an explicit list of package names (not regexps), one per line
+# --alpha-daily implicitly sets --pkg-pattern from the day of the year modulo 26. E.g., 0 is ^[Aa], 1 is ^[Bb]
+# --ok-only implicitly sets --pkg-filelist to a list of packages known to install
+# --no-install gets the list of packages from the lib install directory (evidently only useful with --run-tests)
+
+# TODO At some point this will need to upgraded to support installation from other repos, e.g. BioConductor, github
+
+# All fatal errors terminate with a return code of 100
+
+# N.B. There are two unresolved problems testing some packages:
+# 1. Some test files refer to packages that do not exist in the "Depends" list. Instead they
+#    exists in the "Suggests" list. Unfortunately only a subset of the "Suggests" list is required and
+#    there is no way to tell which. Since many of the "Suggests" packages fail to install on FastR,
+#    routinely including them this can cause the entire installation to fail.
+# 2. Testing vignettes requires the "knitr" and possibly the "rmarkdown" packages, which also have
+#    a long list of dependents, some of which do not install on FastR.
+cat("Running install.packages.R:\n")
+
+args <- commandArgs(TRUE)
+
+usage <- function() {
+    cat(paste(
+        "usage: Rscript install.packages.R [options] <--list-versions|--pkg-pattern pattern|--pkg-filelist file>",
+        "This script gets default library path from R_LIBS_USER env var.",
+        "",
+        "Options: ",
+        "[--repos name=value,...]",
+        "  Comma-separated list of repositories to use for the package installation",
+        "  Example: --repos FASTR=file://home/user/fastr/com.oracle.truffle.r.test.native/packages/repo,CRAN=file://home/user/minicran",
+        "[--cache-pkgs name=value,...]",
+        "  Comma-separated list of key=value pairs of package cache attributes:",
+        "    dir ... directory path to the package cache",
+        "    vm ... fastr | gnur",
+        "    sync ... TRUE | FALSE",
+        "[--verbose | -v]",
+        "[--very-verbose | -V]",
+        "[--dry-run | --dryrun]",
+        "[--no-install | -n] ",
+        "  Do not install any packages, use already installed ones.",
+        "[--random count]",
+        "  Test only `count` random packages of all the packages to be tested.",
+        "[--install-dependents-first]",
+        "",
+        "[--run-mode mode]",
+        "  `mode` can be one of 'system', 'internal', or 'context': ",
+        "    system: Uses a subprocess via the `system2` function. ",
+        "    internal: Uses internal functions like utils::install.packages. ",
+        "    context: Run in separate FastR context.",
+        "  Default is system",
+        "[--test-mode mode]",
+        "[--test-executable path_to_rscript]",
+        "  The executable to use in 'system' test mode.",
+        "[--install-mode mode]",
+        "  Default install mode is 'internal'.",
+        "",
+        "[--find-top100]",
+        "[--find-top n]",
+        "  Only finds top `n` packages according to `cranlogs` package and prints them.",
+        "",
+        "[--run-tests]",
+        "  Whether to run any tests on successfully installed packages (not including dependents).",
+        "  Default is false.",
+        "[--testdir dir]",
+        "  The directory to use for the outputs of testing the packages.",
+        "  Default is 'test'",
+        "[--print-install-status]",
+        "  Report status of package installation.",
+        "[--list-versions]",
+        "  Only list versions of the packages to be installed or tested, do not install nor test anything.",
+        "  Implies --dry-run",
+        "[--list-canonical]",
+        "[--use-installed-pkgs]",
+        "  If set, the lib install directory is analyzed for existing (correctly) installed packages ",
+        "  and these are not re-installed.",
+        "[--invert-pkgset]",
+        "[--alpha-daily]",
+        "[--count-daily count]",
+        "[--ok-only]",
+        "[--important-pkgs file]",
+        "[--ignore-suggests file]",
+        "[--pkg-filelist file]",
+        "  File containing a list of packages to install and potentially test.",
+        "  Mutually exclusive with --pkg-pattern",
+        "[--pkg-pattern package-pattern]",
+        "  A pattern for the packages to install and/or test.",
+        "  Mutually exclusive with --pkg-filelist.",
+        sep="\n"
+    ))
+    cat("See documentation/dev/testing.md for the full description. \n")
+    quit(status=100)
+}
+
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+
+strip.version <- function(x) gsub("\\s*\\(.*\\)$", "", x)
+
+initial.packages <- c("methods", "datasets", "utils", "grDevices", "graphics", "stats")
+
+default.packages <- c("R", "base", "grid", "splines", "utils",
+        "compiler", "grDevices", "methods", "stats", "stats4",
+        "datasets", "graphics", "parallel", "tools", "tcltk")
+
+# List of packages that are OK to ignore when installing "suggests".
+# The list will be loaded lazily from the path in 'ignore.suggests.file'.
+# Therefore, always use 'get.ignore.suggests'.
+ignore.suggests <- NULL
+
+get.ignore.suggests <- function() {
+    if (is.null(ignore.suggests)) {
+        if (!file.exists(ignore.suggests.file)) {
+            log.and.abort("Cannot load file suggested packages to ignore from '", ignore.suggests.file, "'.", status = 200)
+        }
+        ignore.all.but <- function(...) structure(as.vector(list(...)), class='negation')
+        # eval in the current env such that 'ignore.all.but' is available
+        ignore.suggests <<- source(ignore.suggests.file, local=environment())
+    }
+    ignore.suggests
+}
+
+# manually maintained list of packages that need to be install with 'install.fastr.packages'
+overrides <- list(
+    fastr = c("rJava", "data.table"),
+    gnur = c("data.table")
+)
+
+choice.depends <- function(pkg, choice=c("direct","suggests")) {
+    if (choice == "direct") {
+        depends <- c("Depends", "Imports", "LinkingTo")
+    } else {
+        depends <- "Suggests"
+    }
+    pkgName <- pkg["Package"]
+    all.deps <- character()
+    for (dep in depends) {
+        deps <- pkg[dep]
+        if (!is.na(deps)) {
+            log.message(dep, " deps for: ", pkgName, " ", deps, "\n", level = 2)
+            deplist <- strip.version(trim(unlist(strsplit(deps, fixed=T, ","))))
+            # strip out R and the default packages
+            deplist <- deplist[!(deplist %in% default.packages)]
+            all.deps <- append(all.deps, deplist)
+        }
+    }
+    unname(all.deps)
+}
+
+# provides JVM args when running the tests
+fastr.test.jvm.args <- function() {
+    mx.args.file <- file.path(curScriptDir, "..", "test.mx.args")
+    tryCatch({
+        if (file.exists(mx.args.file)) {
+            opts <- paste0('"', paste0(readLines(mx.args.file), collapse=" "), '"')
+            log.message(paste0("FASTR_INTERNAL_ARGS=", opts), level=1)
+            return (opts)
+        }
+    })
+    return ("'--experimental-options --R.IgnoreGraphicsCalls=true'")
+}
+
+# returns a vector of package names that are the direct dependents of pkg
+direct.depends <- function(pkg) {
+    choice.depends(pkg, "direct")
+}
+
+# returns a vector of package names that are the "Suggests" dependents of pkg
+suggest.depends <- function(pkg) {
+    choice.depends(pkg, "suggests")
+}
+
+# returns the transitive set of dependencies in install order
+# the starting set of dependencies may be "direct" or "suggests"
+# although once we start recursing, it becomes "direct"
+install.order <- function(pkgs, pkg, choice, depth=0L) {
+
+    ndup.append <- function(v, name) {
+        if (!name %in% v) {
+            v <- append(v, name)
+        }
+        v
+    }
+
+    pkgName <- pkg["Package"]
+    result <- character()
+    depends <- choice.depends(pkg, choice)
+    for (depend in depends) {
+        # check it is in avail.pkgs (cran)
+        if (depend %in% avail.pkgs.rownames) {
+            depend.result <- install.order(pkgs, pkgs[depend, ], "direct", depth=depth + 1)
+            for (dr in depend.result) {
+                result <- ndup.append(result, dr)
+            }
+        }
+    }
+    if (depth > 0L) {
+        result <- append(result, pkgName)
+    }
+    unname(result)
+}
+
+get.default.cran.mirror <- function() {
+    default.cran.mirror.path <- file.path(R.home(), "etc", "DEFAULT_CRAN_MIRROR")
+    tryCatch({
+        con <- file(default.cran.mirror.path, "r");
+        cran.mirror <<- readLines(con)[[1]]
+        close(con)
+        cran.mirror
+    }, error = function(err) {
+        log.output(function() print(err))
+        log.and.abort("ERROR while getting ", default.cran.mirror.path,
+            ", are you using a proper R home directory?", status=11)
+    })
+}
+
+set.repos <- function() {
+    # Based on the value of repos.list we set the "repos" option
+    # which is used by available.packages etc.
+    repos <- character()
+    for (repo in repo.list) {
+        parts <- strsplit(repo, "=", fixed=T)[[1]]
+        name <- parts[[1]]
+        if (length(parts) > 1) {
+            uri <- parts[[2]]
+        } else {
+            uri <- NA_character_
+        }
+        if (name == "BIOC") {
+            # source("http://bioconductor.org/biocLite.R")
+            # repos["BIOC"] <- biocinstallRepos()[1]
+            # above is correct but provokes bug:
+            # Error in read.table():  more columns than column names
+            repos[["BIOC"]] <- "https://bioconductor.org/packages/3.4/bioc"
+        } else if (name == "CRAN") {
+            if (is.na(uri)) {
+                # not set on command line
+                cran.mirror <<- Sys.getenv("CRAN_MIRROR", unset = "http://cloud.r-project.org/")
+            } else {
+                log.message("Setting CRAN=", uri, level=1)
+                cran.mirror <<- uri
+            }
+            repos[["CRAN"]] <- cran.mirror
+        } else if (name == "FASTR") {
+            # set the FastR internal repo
+            if (is.na(uri)) {
+                path <- normalizePath("com.oracle.truffle.r.test.native/packages/repo")
+                log.message("Setting FastR internal repo FASTR=", path, level=1)
+                repos[["FASTR"]] <- paste0("file://", path)
+            } else {
+                # explicitly set on command line
+                repos[["FASTR"]] <- uri
+                log.message("Setting FastR internal repo FASTR=", uri, level=1)
+            }
+        } else if (name == "SNAPSHOT") {
+            repos[["CRAN"]] <- get.default.cran.mirror()
+        } else {
+            # User defined
+            repos[[name]] <- uri
+        }
+    }
+
+    if (("FASTR" %in% names(repos)) && !("CRAN" %in% names(repos))) {
+        log.message("'--repos FASTR' specified but no CRAN mirror set; setting 'CRAN=", get.default.cran.mirror(), "'\n", level=1)
+        repos[["CRAN"]] <- get.default.cran.mirror()
+    }
+    log.output(function() {
+        cat("Setting option repos to:\n")
+        print(repos); cat('----\n')
+    }, level = 1)
+    options(repos = repos)
+}
+
+# Scans the package installation directory for packages that installed
+# successfully or failed (indicated by leaving a 00-LOCK-pkgname file),
+# depending on the value of the ok argument. Returns a vector of
+# package names
+get.installed.pkgs <- function(ok=T) {
+    pkgs.ok <- character();
+    pkgs.failed <- character()
+    pkgdirs <- list.files(lib.install, no..=T)
+    # find failed installs
+    for (pkgname in pkgdirs) {
+        if (grepl("00LOCK-", pkgname)) {
+            log.message("Installation failed for ", pkgname, level=1)
+            pkg.failed <- gsub("00LOCK-", "", pkgname)
+            pkgs.failed <- append(pkgs.failed, pkg.failed)
+        }
+    }
+    # calculate ok installs
+    for (pkgname in pkgdirs) {
+        if (!grepl("00LOCK-", pkgname) && !pkgname %in% pkgs.failed) {
+            pkgs.ok <- append(pkgs.ok, pkgname)
+        }
+    }
+    return(if (ok) pkgs.ok else pkgs.failed)
+}
+
+get.pkgdir <- function(pkgname) {
+    return(file.path(lib.install, pkgname))
+}
+
+equal.fastr.error.log.sizes <- function(older, newer) {
+    if (length(older) < length(newer)) {
+        # An error log file has been added; so an internal error must have occurred.
+        FALSE
+    } else {
+        # An error log file has been removed or the file list did not change.
+        # Compare sizes of the files.
+        all(older[names(newer)] == newer)
+    }
+}
+
+installed.ok <- function(pkgname, initial_error_log_size) {
+    # try to determine if the install was successful
+    # 1. There must be a directory lib.install/pkgname
+    # 2. There must not be a directory lib.install/00LOCK-pkgname
+    # 3. The FastR error log must be the same size
+    pkgdir <- get.pkgdir(pkgname)
+    if (!file.exists(pkgdir)) {
+        log.message("Package not installed (dir does not exist): ", pkgdir, level = 1)
+        return(FALSE)
+    }
+    if (file.exists(get.pkgdir(paste0("00LOCK-", pkgname)))) {
+        log.message("Package not installed (00LOCK-* file found): ", pkgname, level = 1)
+        return(FALSE)
+    }
+
+    if (!equal.fastr.error.log.sizes(initial_error_log_size, fastr.errors.log.sizes())) {
+        # This is a really nasty case where the error happens during
+        # the test load step. It is not detected by the package
+        # install code and leaves no LOCK file nor does it remove
+        # the faulty package, so it looks like it succeeded.
+        # We delete the package dir here to reflect the failure.
+        log.message("Package not installed (error during test load step): ", pkgname, level = 1)
+        unlink(pkgdir, recursive=T)
+        return(FALSE)
+    }
+    return(TRUE)
+}
+
+test.ok <- function(initial_error_log_size) {
+    equal.fastr.error.log.sizes(initial_error_log_size, fastr.errors.log.sizes())
+}
+
+# For use with --use-installed.
+# Sets up the install.status vector by scanning the package installation
+# directory for OK and FAILED package installs.
+# Returns the list of OK packages
+check.installed.pkgs <- function() {
+    pkgs.ok <- get.installed.pkgs(T)
+    pkgs.failed <- get.installed.pkgs(F)
+    ok <- rep_len(TRUE, length(pkgs.ok))
+    failed <- rep_len(FALSE, length(pkgs.failed))
+    names(ok) <- pkgs.ok
+    names(failed) <- pkgs.failed
+    install.status <<- c(ok, failed)
+    pkgs.ok
+}
+
+# find the available packages and match those against the
+# requested set of candidate packages
+# sets global variables avail.pkgs and toinstall.pkgs, the latter being
+# of the same type as avail.pkgs but containing only those packages to install
+# returns a vector of package names to install/test
+get.pkgs <- function() {
+    my.warning <- function(war) {
+        log.output(function() {
+            cat("Fatal error druing retrieval of available packages:", war$message, ". Value of option repos:\n", sep='')
+            print(options('repos'))
+        })
+        log.and.abort("Fatal error druing retrieval of available packages. More details in log above.", status=22)
+    }
+    tryCatch({
+            avail.pkgs <<- available.packages(type="source", filters = list(add=TRUE, function(x) x))
+        }, warning=my.warning)
+
+    log.repos.info <- function() {
+        cat("\n=========\nDebugging info:\n")
+        cat("Value of option repos:\n")
+        print(options('repos'))
+        availDF <- as.data.frame(avail.pkgs)
+        repoUrls <- unique(availDF$Repository)
+        for(url in repoUrls) {
+            cat("-----\nFirst 30 packages from repo ", url, ":\n", sep='')
+            print(head(availDF[availDF$Repository == url,c('Package', 'Version', 'Repository')]))
+        }
+        cat("\n=========\n\n")
+    }
+
+    # Owing to a FastR bug, we may not invoke the handler above, but
+    # if length(avail.pkgs) == 0, that also means it failed
+    if (length(avail.pkgs) == 0) {
+        log.output(log.repos.info)
+        log.and.abort("Fatal error: no packages found in repo(s).\n", status=33)
+    }
+
+    avail.pkgs.rownames <<- rownames(avail.pkgs)
+    if (use.installed.pkgs) {
+        installed.pkgs <- check.installed.pkgs()
+    } else {
+        installed.pkgs <- character()
+    }
+
+    in.filelist <- function(x)  x["Package"] %in% pkg.filelist
+
+    in.pattern <- function(x) grepl(pkg.pattern, x["Package"])
+
+    in.installed <- function(x) x["Package"] %in% installed.pkgs
+
+    in.overrides <- function(x) FALSE
+
+    basic.exclude <- function(x, exclude.installed = T) {
+        ifelse(exclude.installed, in.installed(x), F)
+    }
+
+    set.match.fun <- function(exclude.installed = T) {
+        # either pkg.pattern is set or pkg.filelist but not both (checked earlier)
+        # if inverting, alter sense of the basic match
+        if (!is.na(pkg.filelistfile)) {
+            if (invert.pkgset) {
+                match.fun <- function(x) !in.filelist(x) && (in.overrides(x) || !basic.exclude(x, exclude.installed))
+            } else {
+                match.fun <- function(x) in.filelist(x) && (in.overrides(x) || !basic.exclude(x, exclude.installed))
+            }
+        } else {
+            if (invert.pkgset) {
+                match.fun <- function(x) !in.pattern(x) && (in.overrides(x) || !basic.exclude(x, exclude.installed))
+            } else {
+                match.fun <- function(x) in.pattern(x) && (in.overrides(x) || !basic.exclude(x, exclude.installed))
+            }
+        }
+    }
+
+    match.fun <- set.match.fun()
+    log.output(function() {
+        cat("Filtering the packages to install: invert.pkgset=", invert.pkgset, ", pkg.pattern=", pkg.pattern, ".\n")
+        cat("pkg.filelist:\n"); print(pkg.filelist)
+    }, level = 1)
+
+    matched.avail.pkgs <- apply(avail.pkgs, 1, match.fun)
+    toinstall.pkgs <<- avail.pkgs[matched.avail.pkgs, , drop=F]
+
+    if (length(toinstall.pkgs) == 0 && !use.installed.pkgs) {
+        log.output(function() {
+            cat("Fatal error: requested package(s) found in repo(s).\n")
+            cat("toinstall.pkgs: \n")
+            print(toinstall.pkgs)
+            cat("matched.avail.pkgs: \n")
+            print(matched.avail.pkgs)
+            log.repos.info()
+        })
+        log.and.abort("Fatal error: requested package(s) found in repo(s). See the log above.", status=55)
+    }
+
+    log.output(log.repos.info, level=2)
+
+    if (!is.na(random.count)) {
+        # install random.count packages taken at random from toinstall.pkgs
+        test.avail.pkgnames <- rownames(toinstall.pkgs)
+        rands <- sample(1:length(test.avail.pkgnames))
+        test.pkgnames <- character(random.count)
+        for (i in (1:random.count)) {
+            test.pkgnames[[i]] <- test.avail.pkgnames[[rands[[i]]]]
+        }
+    } else {
+        if (length(toinstall.pkgs) == 0) {
+            # use.installed.pkgs == TRUE (see above)
+            match.fun <- set.match.fun(F)
+            matched.avail.pkgs <- apply(avail.pkgs, 1, match.fun)
+            test.pkgnames <- rownames(avail.pkgs[matched.avail.pkgs, , drop=F])
+        } else {
+            test.pkgnames <- rownames(toinstall.pkgs)
+            if (!is.na(count.daily)) {
+                # extract count from index given by yday
+                npkgs <- length(test.pkgnames)
+                yday <- as.POSIXlt(Sys.Date())$yday
+                chunk <- as.integer(npkgs / count.daily)
+                start <- (yday %% chunk) * count.daily
+                end <- ifelse(start + count.daily > npkgs, npkgs, start + count.daily - 1)
+                test.pkgnames <- test.pkgnames[start:end]
+            }
+        }
+    }
+
+    log.message("Selected packages for installation/testing: ", paste0(test.pkgnames, collapse=","), level=1)
+    test.pkgnames
+}
+
+# Serially install the packages in pkgnames.
+# Return TRUE if the entire install succeeded, FALSE otherwise
+# If dependents.install=T, this is a nested install of the dependents
+# of one of the initial list. N.B. In this case pkgnames is the
+# transitively computed list so this never recurses more than one level
+install.pkgs <- function(pkgnames, dependents.install=F, log=T) {
+    if (!dry.run) {
+        log.output(function() {
+            cat("packages to install (+dependents):\n")
+            for (pkgname in pkgnames) {
+                cat(pkgname, "\n")
+            }
+        })
+    }
+    install.count <- 1
+    install.total <- length(pkgnames)
+    result <- TRUE
+    for (pkgname in pkgnames) {
+        if (log) {
+            log.message.always("BEGIN processing: ", pkgname, "\n")
+            log.timestamp()
+        }
+        dependent.install.ok <- T
+        if (install.dependents.first && !dependents.install) {
+            dependents <- install.order(avail.pkgs, avail.pkgs[pkgname, ], "direct")
+            if (length(dependents) > 0) {
+                # not a leaf package
+                dep.status <- install.status[dependents]
+                # three cases:
+                # 1. all TRUE: nothing to do all already installed ok
+                # 2. any FALSE: abort as install must fail
+                # 3. a mixture of TRUE and NA: ok, but some more to install (the NAs)
+                if (any(!dep.status, na.rm=T)) {
+                    # case 2
+                    log.message.always("not installing dependents of: ", pkgname, ", one or more previously failed", "\n")
+                    dependent.install.ok <- F
+                } else {
+                    if (anyNA(dep.status)) {
+                        # case 3
+                        log.message.always("installing dependents of: ", pkgname, "\n")
+                        dependent.install.ok <- install.pkgs(dependents, dependents.install=T)
+                    } else {
+                        # case 1
+                    }
+                }
+            }
+        }
+
+        if (dry.run) {
+            cat("would install:", pkgname, "\n")
+        } else {
+            if (!dependent.install.ok) {
+                log.message.always("not installing: ", pkgname, "dependent install failure","\n")
+            } else {
+                should.install <- T
+                if (pkgname %in% names(install.status)) {
+                    should.install <- F
+                    # already attempted
+                    if (!install.status[pkgname]) {
+                        # failed earlier
+                        if (dependents.install) {
+                            # abort this (nested) install
+                            return(FALSE)
+                        } else {
+                            # continue on top-level install loop
+                        }
+                    }
+                }
+                if (should.install) {
+                    log.message.always("installing: ", pkgname, "(", install.count, " of ", install.total, ")", "\n")
+                    log.timestamp()
+                    this.result <- install.pkg(pkgname)
+                    result <- result && this.result
+                    if (dependents.install && !this.result) {
+                        log.message.always("aborting dependents install, this.result=", this.result)
+                        return(FALSE)
+                    }
+                } else {
+                    msg <- if (install.status[pkgname]) "already installed" else "failed earlier"
+                    log.message.always("not installing: ", pkgname, "(", install.count, "of", install.total, ")", msg)
+                }
+            }
+        }
+        if (log) {
+            log.message.always("END processing: ", pkgname, "\n")
+        }
+
+        install.count = install.count + 1
+    }
+    return(result)
+}
+
+install.suggests <- function(pkgnames) {
+    for (pkgname in pkgnames) {
+        suggests <- install.order(avail.pkgs, avail.pkgs[pkgname, ], "suggests")
+        ignore.pattern <- get.ignore.suggests()[[pkgname]]
+        if (!is.null(ignore.pattern)) {
+            ignore <- character(0)
+            for (i in seq_along(ignore.pattern)) {
+                ignore <- c(ignore, suggests[grepl(ignore.pattern[[i]], suggests)])
+            }
+            suggests <- if (class(ignore.pattern) == 'negation') ignore else setdiff(suggests, ignore)
+            log.message("NOTE: ignoring suggested: ", paste(ignore, collapse=','))
+        }
+        if (length(suggests) > 0) {
+            dep.status <- install.status[suggests]
+            # three cases:
+            # 1. all TRUE: nothing to do all already installed ok
+            # 2. any FALSE: ignore; tests will fail but that's ok
+            # 3. a mixture of TRUE and NA: ok, but some more to install (the NAs)
+            if (any(!dep.status, na.rm=T)) {
+                # case 2
+                log.message("not installing Suggests of: ", pkgname, ", one or more previously failed")
+            } else {
+                if (anyNA(dep.status)) {
+                    # case 3
+                    log.message("installing Suggests of: ", pkgname, ": ", paste(suggests[is.na(dep.status)], sep=", "))
+                    dependent.install.ok <- install.pkgs(suggests[is.na(dep.status)], dependents.install=F, log=F)
+                } else {
+                    # case 1
+                }
+            }
+        }
+    }
+}
+
+is.important.package <- function(pkg.name, pkg.version) {
+    # lazy-load the important packages table
+    if (is.null(important.pkg.table) && !is.na(important.pkg.table.file)) {
+        important.pkg.table <<- read.csv(important.pkg.table.file, header = FALSE, sep = ",", quote = "\"", dec = ".", fill = TRUE, comment.char = "", col.names=c("name","version","url","important"))
+    }
+    if (!is.null(important.pkg.table)) {
+        return (any(important.pkg.table[important.pkg.table$name == pkg.name & important.pkg.table$version == pkg.version, "important"]))
+    }
+    return (FALSE)
+}
+
+show.install.status <- function(test.pkgnames) {
+    if (print.install.status) {
+        log.message.always("BEGIN install status\n")
+        cat("DEBUG: package names: "); print(test.pkgnames)
+        for (pkgname.i in test.pkgnames) {
+            cat(paste0(pkgname.i, ":"), ifelse(install.status[pkgname.i], "OK", "FAILED"), "\n")
+        }
+        log.message.always("END install status\n")
+    }
+}
+
+# performs the installation, or logs what it would install if dry.run = T
+do.it <- function() {
+    log.message("Getting the list of packages to install", level = 2)
+    test.pkgnames <- get.pkgs()
+    log.message("List of packages to install: ", paste0(test.pkgnames, collapse=","), level = 2)
+
+    if (list.versions) {
+        for (pkgname in test.pkgnames) {
+            pkg <- toinstall.pkgs[pkgname, ]
+            # pretend we are accessing CRAN if list.canonical
+            list.contriburl = ifelse(list.canonical, "https://cran.r-project.org/src/contrib", pkg["Repository"])
+            pkg.repo.name <- pkg["Package"]
+            pkg.version <- pkg["Version"]
+            important <- tolower(as.character(is.important.package(pkg.repo.name, pkg.version)))
+            cat(paste(pkg.repo.name, pkg.version, paste0(list.contriburl, "/", pkgname, "_", pkg["Version"], ".tar.gz"), important, sep=","), "\n")
+        }
+    }
+
+    if (install) {
+        log.message.always("BEGIN package installation\n")
+        log.timestamp()
+        install.pkgs(test.pkgnames)
+        log.message.always("END package installation\n")
+        show.install.status(test.pkgnames)
+    }
+
+    if (run.tests) {
+        if (!install) {
+            # The starting set is just what is installed
+            test.pkgnames = check.installed.pkgs()
+            if (!is.na(pkg.filelistfile)) {
+                match.fun <- function(x)  x %in% pkg.filelist
+            } else {
+                match.fun <- function(x) grepl(pkg.pattern, x)
+            }
+            matched.pkgnames <- sapply(test.pkgnames, match.fun)
+            test.pkgnames <- test.pkgnames[matched.pkgnames]
+            # fake the install
+            show.install.status(test.pkgnames)
+        }
+
+        # need to install the Suggests packages as they may be used
+        log.message.always('BEGIN suggests install\n')
+        log.timestamp()
+        install.suggests(test.pkgnames)
+        log.message.always('END suggests install\n')
+
+        log.message.always("BEGIN package tests\n")
+        log.timestamp()
+        test.count = 1
+        test.total = length(test.pkgnames)
+        for (pkgname in test.pkgnames) {
+            if (install.status[pkgname]) {
+                if (dry.run) {
+                    cat("would test:", pkgname, "\n")
+                } else {
+                    log.message.always("BEGIN testing: ", pkgname, "(", test.count, "of", test.total, ")")
+                    test.package(pkgname)
+                    log.message.always("END testing: ", pkgname)
+                }
+            } else {
+                log.message.always("install failed, not testing: ", pkgname)
+            }
+            test.count = test.count + 1
+        }
+        log.message.always("END package tests\n")
+    }
+}
+
+# Returns a vector (with names) containing the sizes of all 'fastr_errors*.log' files
+fastr.errors.log.sizes <- function() {
+    dirs <- unique(c(getwd(), R.home(), path.expand('~'), "/tmp"))
+    listed <- list.files(dirs, full.names=T)
+    filtered <- listed[grepl("fastr_errors.*\\.log", listed)]
+    sizes <- file.info(filtered)$size
+    names(sizes) <- filtered
+    return (sizes)
+}
+
+# installs a single package or retrieves it from the cache
+install.pkg <- function(pkgname) {
+    error_log_size <- fastr.errors.log.sizes()
+
+    # save and restore working dir in case the installation process doesn't
+    prev.wd <- getwd()
+
+    rc <- pkg.cache.internal.install(pkg.cache, pkgname, contrib.url(getOption("repos"), "source"), lib.install)
+    setwd(prev.wd)
+
+    success <- FALSE
+    if (rc == 0L) {
+        # be paranoid and also check file system and log
+        success <- installed.ok(pkgname, error_log_size)
+    }
+    log.message("installation succeeded for ", pkgname, ": ", success, level=1)
+    names(success) <- pkgname
+    install.status <<- append(install.status, success)
+    return(success)
+}
+
+get.test.executable <- function() {
+    if (is.na(test.executable)) {
+        log.and.abort("You want to run tests but did not provide the path to the Rscript binary", status=5)
+    }
+    test.executable
+}
+
+check.create.dir <- function(name) {
+    if (!file.exists(name)) {
+        if (!dir.create(name)) {
+            log.and.abort("cannot create: ", name, status=6)
+        }
+    } else {
+        if(!file_test("-d", name)) {
+            log.and.abort(name, "exists and is not a directory", status=7)
+        }
+    }
+}
+
+getPkgEnv <- function(pkgname) {
+    envOneLine <- Sys.getenv(paste0("PKG_TEST_ENV_", pkgname))
+    envVars <- strsplit(envOneLine, ",")[[1]]
+    log.message("Package-specific environment: ", envVars)
+    return (envVars)
+}
+
+test.package <- function(pkgname) {
+    testdir.path <- testdir
+    check.create.dir(testdir.path)
+    check.create.dir(file.path(testdir.path, pkgname))
+    start.time <- proc.time()[[3]]
+    res <- 0L
+    error_log_size <- fastr.errors.log.sizes()
+    pkgEnv <- getPkgEnv(pkgname)
+    if (test.mode == "system") {
+        res <- system.test(pkgname, pkgEnv)
+    } else if (test.mode == "internal") {
+        res <- tryCatch({
+            tools::testInstalledPackage(pkgname, outDir=file.path(testdir.path, pkgname), lib.loc=lib.install)
+        }, error = function(e) 1L)
+    } else if (test.mode == "context") {
+        log.and.abort("context run-mode not implemented\n", status=91)
+    }
+    # be paranoid
+    if (!test.ok(error_log_size)) {
+        res <- 1L
+    }
+    end.time <- proc.time()[[3]]
+    log.message("TEST_TIME: ", pkgname, end.time - start.time)
+    return (res)
+}
+
+is.fastr <- function() {
+    exists(".fastr.context.get", baseenv())
+}
+
+system.test <- function(pkgname, pkgEnv) {
+    script <- normalizePath(file.path(curScriptDir, "test.package.R"))
+    options <- character(0)
+    if (!is.fastr()) {
+        # GnuR's Rscript command does not load the 'methods' package by default.
+        # But the examples are assumed to be run in a shell where the package is on the search path.
+        options <- paste0("--default-packages=", paste0(initial.packages, collapse=","))
+    }
+    args <- c(options, script, pkgname, file.path(testdir, pkgname), lib.install)
+    # we want to stop tests that hang, but some packages have many tests
+    # each of which spawns a sub-process (over which we have no control)
+    # so we time out the entire set after 20 minutes.
+    genEnv <- c(paste0("R_LIBS_USER=", shQuote(lib.install)),
+             "R_LIBS=",
+             # assuming there isn't already something else in FASTR_INTERNAL_ARGS
+             paste0("FASTR_INTERNAL_ARGS=", fastr.test.jvm.args())
+            )
+    env <- c(pkgEnv, genEnv)
+        if(Sys.getenv("FASTR_GCTORTURE") == "") {
+            rc <- system2(get.test.executable(), args, env=env, timeout=1200)
+        } else {
+            rc <- system2(get.test.executable(), args, env=env)
+        }
+    rc
+}
+
+get.argvalue <- function() {
+    if (length(args) >= 2L) {
+        value <- args[2L]
+        args <<- args[-1L]
+        return(value)
+    } else {
+        usage()
+    }
+}
+
+# parse the (command line) arguments
+parse.args <- function() {
+    while (length(args)) {
+        a <- args[1L]
+        if (a %in% c("-h", "--help")) {
+            usage()
+        } else if (a == "--verbose" || a == "-v") {
+            verbose <<- T
+        } else if (a == "-V"  || a == "--very-verbose") {
+            verbose <<- T
+            very.verbose <<- T
+        } else if (a == "--quiet") {
+            quiet <<- T
+        } else if (a == "--no-install" || a == "-n") {
+            install <<- F
+        } else if (a == "--dryrun" || a == "--dry-run") {
+            dry.run <<- T
+        } else if (a == "--ignore-blacklist") {
+            # Silently ignore for backwards compatibility
+        } else if (a == "--repos") {
+            repo.list <<- strsplit(get.argvalue(), ",")[[1]]
+        } else if (a == "--cache-pkgs") {
+            pkg.cache$enabled <- TRUE
+            svalue <- strsplit(get.argvalue(), ",")[[1]]
+            for (s in svalue) {
+                arg <- strsplit(s, "=", fixed=T)[[1]]
+                if (arg[[1]] == "dir") {
+                    assign(arg[[1]], normalizePath(arg[[2]]), envir=pkg.cache)
+                } else {
+                    assign(arg[[1]], arg[[2]], envir=pkg.cache)
+                }
+            }
+        } else if (a == "--random") {
+            random.count <<- as.integer(get.argvalue())
+            if (is.na(random.count)) {
+                usage()
+            }
+        } else if ( a == "--alpha-daily") {
+            day.index <- as.POSIXlt(Sys.Date())$yday %% 26
+            l <- letters[day.index]
+            ul <- toupper(l)
+            pkg.pattern <<- paste0("^[", ul, l, "]")
+        } else if ( a == "--count-daily") {
+            count.daily <<- as.integer(get.argvalue())
+            if (is.na(count.daily)) {
+                usage()
+            }
+        } else if ( a == "--ok-only") {
+            pkg.filelistfile <<- file.path(this.package, "ok.packages")
+        } else if (a == "--test-mode") {
+            test.mode <<- get.argvalue()
+            if (!(test.mode %in% c("system", "internal", "context"))) {
+                usage()
+            }
+        } else if (a == "--test-executable") {
+            test.executable <<- get.argvalue()
+        } else if (a == "--install-mode") {
+            install.mode <<- get.argvalue()
+            if (!(install.mode %in% c("system", "internal", "context"))) {
+                usage()
+            }
+        } else if (a == "--run-mode") {
+            # just for compatibility
+            run.mode <- get.argvalue()
+            if (!(run.mode %in% c("system", "internal", "context"))) {
+                usage()
+            }
+            test.mode <<- run.mode
+            install.mode <<- run.mode
+        } else if (a == "--pkg-filelist") {
+            pkg.filelistfile <<- get.argvalue()
+        } else if (a == "--pkg-pattern") {
+            pkg.pattern <<- get.argvalue()
+        } else if (a == "--run-tests") {
+            run.tests <<- TRUE
+        } else if (a == "--testdir") {
+            testdir <<- get.argvalue()
+        } else if (a == "--print-install-status") {
+            print.install.status <<- T
+        } else if (a == "--list-versions") {
+            list.versions <<- TRUE
+        } else if (a == "--list-canonical") {
+            list.canonical <<- TRUE
+        } else if (a == "--install-dependents-first") {
+            install.dependents.first <<- TRUE
+        } else if (a == "--use-installed-pkgs") {
+            use.installed.pkgs <<- TRUE
+        } else if (a == "--invert-pkgset") {
+            invert.pkgset <<- TRUE
+        } else if (a == "--find-top100") {
+            find.top.pkgs <<- 100L
+        } else if (a == "--find-top") {
+            find.top.pkgs <<- as.integer(get.argvalue())
+        } else if (a == "--important-pkgs") {
+            important.pkg.table.file <<- get.argvalue()
+            if (is.na(important.pkg.table.file)) {
+                usage()
+            }
+        } else if (a == "--ignore-suggests") {
+            ignore.suggests.file <<- get.argvalue()
+            if (is.na(ignore.suggests.file)) {
+                usage()
+            }
+        } else {
+            if (grepl("^-.*", a)) {
+                usage()
+            }
+            # backwards compatibility
+            pkg.pattern <<- a
+        }
+
+        args <<- args[-1L]
+    }
+    if (!is.na(pkg.pattern) && !is.na(pkg.filelistfile)) {
+        log.and.abort("--pkg.pattern and --pkg.filelist are mutually exclusive", status=92)
+    }
+    if (is.na(pkg.pattern) && is.na(pkg.filelistfile)) {
+        pkg.pattern <<- "^.*"
+    }
+    if (!install) {
+        use.installed.pkgs <<- T
+    }
+    # list.versions is just that
+    if (list.versions) {
+        install <<- F
+        run.tests <<- F
+    }
+}
+
+cat.args <- function() {
+    log.output(function() {
+        cat("tempdir:", tempdir(), "\n")
+        cat("cran.mirror:", cran.mirror, "\n")
+        cat("repo.list:", repo.list, "\n")
+        cat("lib.install:", lib.install, "\n")
+        cat("install:", install, "\n")
+        cat("install.dependents.first:", install.dependents.first, "\n")
+        cat("dry.run:", dry.run, "\n")
+        cat("pkg.pattern:", pkg.pattern, "\n")
+        cat("random.count:", random.count, "\n")
+        cat("count.daily:", count.daily, "\n")
+        cat("test.mode:", test.mode, "\n")
+        cat("test.executable:", test.executable, "\n")
+        cat("install.mode:", install.mode, "\n")
+        cat("run.tests:", run.tests, "\n")
+        cat("print.install.status:", print.install.status, "\n")
+        cat("use.installed.pkgs:", use.installed.pkgs, "\n")
+        cat("invert.pkgset:", invert.pkgset, "\n")
+        cat("testdir.path:", testdir, "\n")
+        cat("ignore.suggests.file:", ignore.suggests.file, "\n")
+        cat("pkg.cache: enabled =", pkg.cache$enabled, "; vm =", pkg.cache$vm, "; dir =", pkg.cache$dir,
+            "; mode =", pkg.cache$mode, "; version =", pkg.cache$version, "; ignore =", pkg.cache$ignore, "\n")
+    }, level=1)
+}
+
+quiet <- F
+verbose <- F
+very.verbose <- F
+log.file <- file.path(getwd(), 'install.packages.R.log')
+cat("The output is also logged into: ", log.file, "\n")
+
+loggable <- function(level) {
+    result <- T
+    tryCatch(
+        result <- level == -1 || (!quiet && (very.verbose || level == 0 || (verbose && level <= 1))),
+        error = function(e) {
+            cat("ERROR!!\n")
+            print(e)
+        })
+    result
+}
+
+log.and.abort <- function(..., status=100) {
+    cat(paste0(..., "\n"), file = log.file, append = T)
+    cat(paste0(..., "\n"))
+    log.output(function() traceback(-2))
+    quit("no", status=status)
+}
+
+log.output <- function(fun, level=0) {
+    if(loggable(level)) {
+        fun();
+        sink(log.file, append = T)
+        fun();
+        sink()
+    }
+}
+
+log.message.always <- function(...) {
+    log.message(..., level=-1)
+}
+
+log.message <- function(..., level=0) {
+    if(loggable(level)) {
+        cat(paste0(..., "\n"))
+        cat(paste0(..., "\n"), file = log.file, append = T)
+    }
+}
+
+log.timestamp <- function() {
+    if(!quiet) {
+        cat("timestamp:", as.character(Sys.time()), "\n")
+        cat("timestamp:", as.character(Sys.time()), "\n", file = log.file, append = T)
+    }
+}
+
+check.libs <- function() {
+    lib.install <<- Sys.getenv("R_LIBS_USER", unset=NA)
+    if (is.na(lib.install)) {
+        log.and.abort("R_LIBS_USER must be set", status = 101)
+    }
+    if (!file.exists(lib.install) || is.na(file.info(lib.install)$isdir)) {
+        log.and.abort(lib.install, "does not exist or is not a directory", status = 102)
+    }
+}
+
+check.pkgfilelist <- function() {
+    if (!is.na(pkg.filelistfile)) {
+        if (file.exists(pkg.filelistfile)) {
+            pkg.filelist <<- readLines(pkg.filelistfile)
+        } else {
+            log.and.abort(pkg.filelistfile, "not found", status = 103)
+        }
+    }
+}
+
+do.find.top.pkgs <- function(n) {
+    names <- if (n <= 100L) {
+        do.find.top.cranlogs(n)
+    } else {
+        do.find.top.rstudio(n)
+    }
+    if (!is.null(names)) {
+        do.find.top.print.list(names)
+    }
+}
+
+do.find.top.cranlogs <- function(n) {
+    if (!require('cranlogs', quietly = T)) {
+        install.packages('cranlogs', quiet = T)
+        library('cranlogs', quietly = T)
+    }
+    top100 <- cran_top_downloads(when = c("last-day", "last-week", "last-month"), count = n)
+    top100[['package']]
+}
+
+do.find.top.rstudio <- function(n) {
+    # RStudio provides data since Oct 1, 2012
+    start <- as.Date('2012-10-01')
+    today <- Sys.Date()
+
+    all.days <- seq(start, today, by = 'day')
+
+    year <- as.POSIXlt(all.days)$year + 1900
+    urls <- rev(paste0('http://cran-logs.rstudio.com/', year, '/', all.days, '.csv.gz'))
+
+    tmp.file <- tempfile()
+    download.url <- ""
+    for (i in 1:length(urls)) {
+        tryCatch({
+            download.url <- urls[[i]]
+            download.file(download.url, tmp.file, quiet = !verbose)
+            # break after the first successful download
+            log.message("successfully downloaded: ", download.url, level=1)
+            break ()
+        }, error = function(e) e)
+    }
+
+    if (file.exists(tmp.file)) {
+        pkg.table <- read.csv(tmp.file)
+
+        # remove duplicate downloads from same IP and select column "package" only
+        #pkg.table <- unique(pkt.table[,c("package", "ip_id")])
+
+        # add a column for the count (initialized with 1L)
+        pkg.table <- cbind(pkg.table, count=rep(1L, nrow(pkg.table)))[,c("package", "count")]
+
+        # group by column 'count' using aggregate function 'sum'
+        pkg.table.with.count <- aggregate(count ~ package, pkg.table, sum)
+
+        # order by download count (ascending)
+        pkg.table.with.count <- pkg.table.with.count[order(-pkg.table.with.count$count), ]
+
+        # return just the names of the top 'n' but still ordered by download count
+        as.character(pkg.table.with.count[1:n, "package"])
+    } else {
+        log.message("Could not download ", download.url, " to ", tmp.file)
+    }
+}
+
+do.find.top.print.list <- function(names) {
+    avail.pkgs <- available.packages(type="source")
+    for (i in 1:length(names)) {
+        pkgname <- names[[i]]
+        # the names could contain filtered packages
+        if (pkgname %in% avail.pkgs[, "Package"]) {
+            pkg <- avail.pkgs[pkgname, ]
+            list.contriburl = ifelse(list.canonical, "https://cran.r-project.org/src/contrib", pkg["Repository"])
+            cat(pkg["Package"], pkg["Version"], paste0(list.contriburl, "/", pkgname, "_", pkg["Version"], ".tar.gz"), "\n", sep = ",")
+        }
+    }
+}
+
+run.setup <- function() {
+    check.libs()
+    check.pkgfilelist()
+    set.repos()
+    lib.install <<- normalizePath(lib.install)
+    .libPaths(c(.libPaths(), lib.install))
+    cat.args()
+}
+
+# Determines the directory of the script assuming that there is a "--file=" argument on the command line.
+getCurrentScriptDir <- function() {
+    if (!interactive()) {
+        cmdArgs <- commandArgs()
+        res <- startsWith(cmdArgs, '--file=')
+        fileArg <- cmdArgs[res]
+        if (length(fileArg) > 0L) {
+            p <- strsplit(fileArg, "=")[[1]][[2]]
+            return(dirname(p))
+        }
+    } else {
+        if ("install.packages.R" %in% dir(getwd())) {
+            return (getwd())
+        }
+    }
+    return (NULL)
+}
+
+run <- function() {
+    tryCatch({
+        parse.args()
+        if (!is.na(find.top.pkgs)) {
+            set.repos()
+            do.find.top.pkgs(find.top.pkgs)
+        } else {
+            log.message("Running: run.setup()", level=2)
+            run.setup()
+            log.message("Running: do.it()", level=2)
+            do.it()
+            log.message("Done running: do.it()", level=2)
+        }
+    }, errors = function(e) {
+        log.output(function() {
+            cat("Unexpected error: ")
+            print(e)
+            traceback()
+        })
+    })
+}
+
+# load package cache code
+curScriptDir <- getCurrentScriptDir()
+if (!is.null(curScriptDir)) {
+    source(file.path(curScriptDir, "install.cache.R"))
+    if (!is.fastr()) {
+        fastr.functions.path <- file.path(curScriptDir, "fastr.functions.rdx")
+        if (file.exists(fastr.functions.path)) {
+            loaded.names <- load(fastr.functions.path)
+            log.message("Loaded names: ", loaded.names)
+        } else {
+            log.message("Warning: Running with GnuR but could not find file '", fastr.functions.path, "'")
+        }
+    }
+} else {
+    log.message("Cannot use package cache since script directory cannot be determined")
+
+    # avoid errors
+    pkg.cache.install <<- function(...) FALSE
+    pkg.cache.get <<- function(...) FALSE
+    pkg.cache.insert <<- function(...) FALSE
+}
+
+this.package <- dirname(curScriptDir)
+
+repo.list <- c("CRAN")
+pkg.cache <- as.environment(list(enabled=FALSE, table.file.name="version.table", size=2L, sync=FALSE, mode="local", ignore="default"))
+cran.mirror <- NA
+lib.install <- NA
+testdir <- "test"
+
+pkg.pattern <- NA
+pkg.filelist <- character()
+pkg.filelistfile <- NA
+print.install.status <- F
+use.installed.pkgs <- F
+install <- T
+install.dependents.first <- F
+install.status <- logical()
+dry.run <- F
+avail.pkgs <- NULL
+avail.pkgs.rownames <- NULL
+toinstall.pkgs <- NULL
+random.count <- NA
+count.daily <- NA
+install.mode <- "internal"
+test.mode <- "system"
+test.executable <- NA
+run.tests <- FALSE
+gnur <- FALSE
+list.versions <- FALSE
+list.canonical <- FALSE
+invert.pkgset <- F
+find.top.pkgs <- NA
+important.pkg.table.file <- NA
+important.pkg.table <- NULL
+ignore.suggests.file <- file.path(curScriptDir, "..", "ignore.suggests")
+
+cat("Running install.packages.R, interactive=", interactive(), file=log.file, append=T)
+if (!interactive()) {
+    options(error = function(...) {
+        log.message.always("Unexpected error occured")
+        log.output(function() {
+            print(list(...))
+            traceback(2)
+        })
+        quit('no', status=47)
+    })
+}
+if (!interactive()) {
+    run()
+}
+cat("Finshed install.packages.R", file=log.file, append=T)

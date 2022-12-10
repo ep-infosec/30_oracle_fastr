@@ -1,0 +1,10 @@
+## classes
+exportClasses(Product)
+exportClasses(TV)
+exportClasses(Laptop)
+exportClasses(OrderProcessor)
+exportClasses(LicensingProcessor)
+exportClasses(OrderProcessor)
+
+## methods
+exportMethods(processOrder)
